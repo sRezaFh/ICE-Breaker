@@ -26,9 +26,12 @@ export async function idleWander(cursor: GhostCursor, page: Page, steps = 3): Pr
     x = clamp(x + (Math.random() - 0.5) * range * 2, 0, viewport.width);
     y = clamp(y + (Math.random() - 0.5) * range * 2, 0, viewport.height);
 
-    // moveSpeed > 1 shortens ghost-cursor's per-move path/timing - default is
-    // a random 0.5-1.0, this trades a little realism for wall-clock time
-    await cursor.moveTo({ x, y }, { moveSpeed: 3 });
+    // ghost-cursor path steps scale with 25/moveSpeed, not moveSpeed itself -
+    // default (unset) resolves to a random 0-1, i.e. an internal factor of
+    // 25+ steps; 100 here drops that to ~6, well under default, so this is
+    // actually faster rather than the inverted moveSpeed:3 that shipped
+    // earlier (25/3 ≈ 8, above the default range - slower, not faster)
+    await cursor.moveTo({ x, y }, { moveSpeed: 100 });
     await sleep(20 + Math.random() * 40);
   }
 }
@@ -47,10 +50,10 @@ export async function humanClick(
   // ghost-cursor's click() only accepts an ElementHandle/selector (or nothing,
   // clicking at the current position) - raw coordinates need a moveTo first
   if ('x' in target && 'y' in target) {
-    await cursor.moveTo(target, { moveSpeed: 3 });
+    await cursor.moveTo(target, { moveSpeed: 100 });
     await cursor.click();
   } else {
-    await cursor.click(target, { moveSpeed: 3 });
+    await cursor.click(target, { moveSpeed: 100 });
   }
 }
 
