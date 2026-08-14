@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL ?? 'http://localhost:3001';
+// trim stray whitespace/trailing slash - a misconfigured env var otherwise
+// turns into a double slash or literal %20 in every request URL
+const WORKER_URL = (process.env.NEXT_PUBLIC_WORKER_URL ?? 'http://localhost:3001').trim().replace(/\/+$/, '');
 const WORKER_WS_URL = WORKER_URL.replace(/^http/, 'ws') + '/ws';
 
 type RunStatus = 'idle' | 'running' | 'done' | 'error';
