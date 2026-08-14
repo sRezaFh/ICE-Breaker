@@ -49,48 +49,73 @@ async function findVisibleButtonNow(page: Page, text: string): Promise<ElementHa
   return null;
 }
 
-// polls instead of a blind fixed sleep - returns as soon as the button is
-// actually gone rather than always paying the full settle time
-async function waitUntilGone(page: Page, buttonText: string, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  do {
-    if (!(await findVisibleButtonNow(page, buttonText))) return true;
-    await sleep(100);
-  } while (Date.now() < deadline);
-  return !(await findVisibleButtonNow(page, buttonText));
+// a locator re-queries the live DOM each call instead of handing back a
+// handle that can go stale across a click/re-render - returns the element
+// only while it's actually visible (boundingBox() null otherwise)
+type Locator = () => Promise<ElementHandle | null>;
+
+function locateBySelector(page: Page, selector: string): Locator {
+  return async () => {
+    const el = await page.$(selector).catch(() => null);
+    if (!el) return null;
+    const box = await el.boundingBox().catch(() => null);
+    return box ? el : null;
+  };
 }
 
-// the site re-renders this same disclaimer/"I Accept" modal at more than one
-// point (before the captcha, after it, and again once the report table
-// loads) - clicking once and moving on isn't reliable, this clicks then
-// confirms the modal is actually gone before returning, and retries if not
-async function dismissModalUntilGone(
+function locateByExactText(page: Page, text: string): Locator {
+  return () => findVisibleButtonNow(page, text);
+}
+
+// polls instead of a blind fixed sleep - returns as soon as the element is
+// actually gone rather than always paying the full settle time
+async function waitUntilGone(locate: Locator, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (!(await locate())) return true;
+    await sleep(100);
+  } while (Date.now() < deadline);
+  return !(await locate());
+}
+
+// several of this site's overlays (cookie banner, and the disclaimer/"I
+// Accept" modal at three separate points) re-render or re-appear rather than
+// staying dismissed - clicking once and moving on isn't reliable, this
+// clicks then confirms the element is actually gone before returning, and
+// retries if not
+async function dismissUntilGone(
   page: Page,
   cursor: GhostCursor,
-  buttonText: string,
+  locate: Locator,
   label: string,
   maxAttempts = 4,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const button = await findVisibleButtonNow(page, buttonText);
-    if (!button) return true;
+    const el = await locate();
+    if (!el) return true;
 
-    await clickCenter(page, cursor, button);
-    if (await waitUntilGone(page, buttonText, 2000)) return true;
-    log.warn(`[${label}] modal still present after click, retrying (attempt ${attempt}/${maxAttempts})`);
+    await clickCenter(page, cursor, el);
+    if (await waitUntilGone(locate, 2000)) return true;
+    log.warn(`[${label}] still present after click, retrying (attempt ${attempt}/${maxAttempts})`);
   }
-  return !(await findVisibleButtonNow(page, buttonText));
+  return !(await locate());
 }
 
 export async function acceptCookieBanner(page: Page, cursor: GhostCursor): Promise<void> {
   log.step('cookie banner');
-  const button = await page.$('#onetrust-accept-btn-handler').catch(() => null);
+  const locate = locateBySelector(page, '#onetrust-accept-btn-handler');
+  const button = await locate();
   if (!button) {
     log.info('[cookies] no OneTrust banner found, continuing');
     return;
   }
-  await clickCenter(page, cursor, button);
-  log.info('[cookies] accepted');
+
+  const cleared = await dismissUntilGone(page, cursor, locate, 'cookies');
+  if (!cleared) {
+    log.warn('[cookies] banner still present after retries, continuing anyway');
+    return;
+  }
+  log.info('[cookies] accepted and confirmed gone');
 }
 
 export async function acceptDisclaimerModal(page: Page, cursor: GhostCursor): Promise<void> {
@@ -104,7 +129,7 @@ export async function acceptDisclaimerModal(page: Page, cursor: GhostCursor): Pr
     return;
   }
 
-  const cleared = await dismissModalUntilGone(page, cursor, config.acceptButtonText, 'disclaimer');
+  const cleared = await dismissUntilGone(page, cursor, locateByExactText(page, config.acceptButtonText), 'disclaimer');
   if (!cleared) {
     log.warn('[disclaimer] modal still present after retries, continuing anyway');
     return;
@@ -154,10 +179,11 @@ export async function acceptGatedForm(page: Page, cursor: GhostCursor): Promise<
   log.endProgress();
 
   await clickCenter(page, cursor, button);
-  const cleared = await waitUntilGone(page, config.acceptButtonText, 2000);
+  const locate = locateByExactText(page, config.acceptButtonText);
+  const cleared = await waitUntilGone(locate, 2000);
   if (!cleared) {
     log.warn('[accept] gated modal still present after click, retrying');
-    await dismissModalUntilGone(page, cursor, config.acceptButtonText, 'accept');
+    await dismissUntilGone(page, cursor, locate, 'accept');
   }
   log.info('[accept] gated form accepted');
 }
@@ -172,7 +198,7 @@ export async function ensureDisclaimerCleared(page: Page, cursor: GhostCursor): 
 
   log.step('disclaimer recheck');
   log.warn('[disclaimer] modal reappeared before download, dismissing again');
-  const cleared = await dismissModalUntilGone(page, cursor, config.acceptButtonText, 'disclaimer-recheck');
+  const cleared = await dismissUntilGone(page, cursor, locateByExactText(page, config.acceptButtonText), 'disclaimer-recheck');
   if (!cleared) {
     throw new Error('[disclaimer] modal still blocking the page after retries - aborting before download');
   }
