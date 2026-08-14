@@ -26,8 +26,10 @@ export async function idleWander(cursor: GhostCursor, page: Page, steps = 3): Pr
     x = clamp(x + (Math.random() - 0.5) * range * 2, 0, viewport.width);
     y = clamp(y + (Math.random() - 0.5) * range * 2, 0, viewport.height);
 
-    await cursor.moveTo({ x, y });
-    await sleep(80 + Math.random() * 180);
+    // moveSpeed > 1 shortens ghost-cursor's per-move path/timing - default is
+    // a random 0.5-1.0, this trades a little realism for wall-clock time
+    await cursor.moveTo({ x, y }, { moveSpeed: 3 });
+    await sleep(20 + Math.random() * 40);
   }
 }
 
@@ -40,15 +42,15 @@ export async function humanClick(
   // already curves each move, but a click right after a long idle wait with
   // zero prior motion is its own tell
   await idleWander(cursor, page, 1 + Math.floor(Math.random() * 2));
-  await sleep(80 + Math.random() * 150);
+  await sleep(20 + Math.random() * 40);
 
   // ghost-cursor's click() only accepts an ElementHandle/selector (or nothing,
   // clicking at the current position) - raw coordinates need a moveTo first
   if ('x' in target && 'y' in target) {
-    await cursor.moveTo(target);
+    await cursor.moveTo(target, { moveSpeed: 3 });
     await cursor.click();
   } else {
-    await cursor.click(target);
+    await cursor.click(target, { moveSpeed: 3 });
   }
 }
 

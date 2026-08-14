@@ -9,6 +9,7 @@ import {
   passBotChallenge,
   acceptGatedForm,
   selectReportAndSubmit,
+  ensureDisclaimerCleared,
   downloadAllReports,
 } from './flow.js';
 
@@ -34,6 +35,7 @@ export async function runScrape(onFrame?: FrameHandler): Promise<RunResult> {
     await passBotChallenge(page, cursor);
     await acceptGatedForm(page, cursor);
     await selectReportAndSubmit(page, cursor);
+    await ensureDisclaimerCleared(page, cursor);
     const saved = await downloadAllReports(page, cursor);
 
     log.step(`done - ${saved.length} file(s) saved to ${config.downloadDir}`);
