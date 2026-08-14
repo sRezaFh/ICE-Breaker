@@ -1,0 +1,48 @@
+import { config } from './config.js';
+import { launchBrowser } from './browser.js';
+import { makeCursor } from './cursor.js';
+import { log } from './log.js';
+import { startScreencast, type FrameHandler } from './screencast.js';
+import {
+  acceptCookieBanner,
+  acceptDisclaimerModal,
+  passBotChallenge,
+  acceptGatedForm,
+  selectReportAndSubmit,
+  downloadAllReports,
+} from './flow.js';
+
+export type RunResult = { saved: string[] };
+
+// shared by the CLI entrypoint (index.ts) and the worker server - onFrame is
+// only passed by the server, so a plain CLI run never pays for the screencast
+export async function runScrape(onFrame?: FrameHandler): Promise<RunResult> {
+  const { browser, page } = await launchBrowser();
+  const cursor = makeCursor(page, !config.headless || onFrame !== undefined);
+
+  const stopScreencast = onFrame ? await startScreencast(page, onFrame) : null;
+
+  try {
+    log.step(`navigating to ${config.targetUrl}`);
+    await page.goto(config.targetUrl, {
+      waitUntil: 'networkidle2',
+      timeout: config.timeouts.navigationMs,
+    });
+
+    await acceptCookieBanner(page, cursor);
+    await acceptDisclaimerModal(page, cursor);
+    await passBotChallenge(page, cursor);
+    await acceptGatedForm(page, cursor);
+    await selectReportAndSubmit(page, cursor);
+    const saved = await downloadAllReports(page, cursor);
+
+    log.step(`done - ${saved.length} file(s) saved to ${config.downloadDir}`);
+    return { saved };
+  } catch (err) {
+    log.step(`FAILED at the point above - ${(err as Error).message}`);
+    throw err;
+  } finally {
+    if (stopScreencast) await stopScreencast();
+    await browser.close();
+  }
+}

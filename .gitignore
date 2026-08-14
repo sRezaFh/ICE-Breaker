@@ -1,0 +1,12 @@
+node_modules/
+dist/
+downloads/
+chrome-profile/
+*.log
+.env
+.next/
+*.tsbuildinfo
+image.png
+**/debug/*.png
+**/debug/*.html
+**/debug/info.json

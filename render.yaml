@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ice-report-scraper-worker
+    runtime: node
+    plan: free
+    rootDir: worker
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:server
+    envVars:
+      - key: TWOCAPTCHA_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_OWNER
+        sync: false
+      - key: GITHUB_REPO
+        sync: false
+      - key: HEADLESS
+        value: "true"
