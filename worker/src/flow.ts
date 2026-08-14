@@ -7,6 +7,10 @@ import { humanClick, idleWander, sleep } from './cursor.js';
 import { log } from './log.js';
 
 async function clickCenter(page: Page, cursor: GhostCursor, el: ElementHandle): Promise<void> {
+  // boundingBox() is viewport-relative - rows below the fold (the download
+  // table can run to 7+ rows) get a box outside the visible area unless
+  // scrolled into view first
+  await el.evaluate((node) => node.scrollIntoView({ block: 'center' })).catch(() => undefined);
   const box = await el.boundingBox();
   if (!box) throw new Error('element has no bounding box (not visible)');
   await humanClick(cursor, page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
@@ -188,13 +192,16 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
   const saved: string[] = [];
 
   for (const [index, button] of downloadButtons.entries()) {
-    const box = await button.boundingBox();
-    if (!box) continue;
-
     // occasionally a click doesn't register a download in time (page still
     // settling, etc) - one retry clears almost all of these cheaply
     let fileName: string | null = null;
     for (let attempt = 1; attempt <= 2 && !fileName; attempt++) {
+      // boundingBox() is viewport-relative - rows below the fold (this table
+      // can run to 7+ rows) need scrolling into view before it means anything
+      await button.evaluate((node) => node.scrollIntoView({ block: 'center' })).catch(() => undefined);
+      const box = await button.boundingBox();
+      if (!box) break;
+
       const before = snapshotDir(config.downloadDir);
       await humanClick(cursor, page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
       fileName = await waitForNewStableFile(config.downloadDir, before, config.timeouts.downloadMs);

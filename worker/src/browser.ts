@@ -27,9 +27,13 @@ export async function launchBrowser(): Promise<{ browser: Browser; page: Page }>
 
   const browser = (await puppeteerExtra.launch({
     headless: config.headless,
-    defaultViewport: null,
+    // null + --start-maximized only makes sense with a real screen to
+    // maximize against (local headed dev) - headless (Render) has none, so
+    // it silently falls back to Puppeteer's small 800x600 default, which is
+    // why table rows past the first couple ended up outside the viewport
+    defaultViewport: config.headless ? { width: 1280, height: 900 } : null,
     userDataDir: config.userDataDir,
-    args: ['--start-maximized'],
+    args: config.headless ? [] : ['--start-maximized'],
   })) as Browser;
 
   const page = await browser.newPage();
