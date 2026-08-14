@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     rootDir: worker
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && npx puppeteer browsers install chrome && npm run build
     startCommand: npm run start:server
     envVars:
       - key: TWOCAPTCHA_API_KEY
@@ -17,3 +17,8 @@ services:
         sync: false
       - key: HEADLESS
         value: "true"
+      # Render's build and runtime steps don't reliably share puppeteer's
+      # default cache dir ($HOME/.cache) - pinning it under the project's own
+      # persistent directory keeps the Chrome install visible at runtime
+      - key: PUPPETEER_CACHE_DIR
+        value: /opt/render/project/.cache/puppeteer
