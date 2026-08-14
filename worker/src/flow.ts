@@ -137,22 +137,67 @@ export async function acceptDisclaimerModal(page: Page, cursor: GhostCursor): Pr
   log.info('[disclaimer] accepted and confirmed gone');
 }
 
+// truncates rather than dropping the token entirely - length + prefix is
+// enough to confirm a real solution came back without dumping a ~500-char
+// single-use token (not a long-lived secret, but still no reason to log it
+// in full) into the run log
+function truncateToken(text: string | undefined): string {
+  if (!text) return '(none)';
+  return `${text.slice(0, 12)}... (${text.length} chars)`;
+}
+
 // solved via the 2captcha-backed plugin registered in browser.ts: it finds
 // the sitekey, gets a solved token from the provider, and injects it -
-// no click, no image challenge, works headless
+// no click, no image challenge, works headless. every call out to that
+// provider, and everything it hands back, gets logged - this is the one
+// step in the pipeline that spends real API credits and can fail in ways
+// (wrong sitekey, provider timeout, balance exhausted) invisible from the
+// page alone
 export async function passBotChallenge(page: Page, cursor: GhostCursor): Promise<void> {
   log.step('reCAPTCHA');
   await idleWander(cursor, page);
 
   log.info(`[challenge] requesting solve from provider ${config.recaptcha.provider.id} (can take 10-30s)...`);
   const startedAt = Date.now();
-  const { captchas, solutions, error } = await page.solveRecaptchas();
+  const { captchas, solutions, solved, error } = await page.solveRecaptchas();
   const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
 
   if (captchas.length === 0) {
     log.info(`[challenge] no reCAPTCHA found, continuing (${elapsedSec}s)`);
     return;
   }
+
+  for (const c of captchas) {
+    log.info(
+      `[challenge] found ${c._vendor ?? 'unknown'} captcha` +
+        `${c.isEnterprise ? ' (enterprise)' : ''}${c.isInvisible ? ' (invisible)' : ''} ` +
+        `sitekey=${c.sitekey ?? '(none)'} id=${c.id ?? '(none)'}`,
+    );
+  }
+
+  for (const s of solutions) {
+    if (s.error) {
+      log.warn(`[challenge] provider ${s.provider ?? config.recaptcha.provider.id} returned an error for id=${s.id ?? '(none)'}: ${s.error}`);
+      continue;
+    }
+    log.info(
+      `[challenge] provider ${s.provider ?? config.recaptcha.provider.id} id=${s.id ?? '(none)'} ` +
+        `providerCaptchaId=${s.providerCaptchaId ?? '(none)'} hasSolution=${s.hasSolution ?? false} ` +
+        `duration=${s.duration ?? '?'}ms token=${truncateToken(s.text)}`,
+    );
+  }
+
+  for (const sv of solved) {
+    if (sv.error) {
+      log.warn(`[challenge] failed to enter solution for id=${sv.id ?? '(none)'}: ${sv.error}`);
+      continue;
+    }
+    log.info(
+      `[challenge] entered solution for id=${sv.id ?? '(none)'} isSolved=${sv.isSolved ?? false} ` +
+        `responseElement=${sv.responseElement ?? false} responseCallback=${sv.responseCallback ?? false}`,
+    );
+  }
+
   if (error) {
     throw new Error(`[challenge] solver error after ${elapsedSec}s: ${error}`);
   }
