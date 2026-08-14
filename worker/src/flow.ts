@@ -9,8 +9,12 @@ import { log } from './log.js';
 async function clickCenter(page: Page, cursor: GhostCursor, el: ElementHandle): Promise<void> {
   // boundingBox() is viewport-relative - rows below the fold (the download
   // table can run to 7+ rows) get a box outside the visible area unless
-  // scrolled into view first
-  await el.evaluate((node) => node.scrollIntoView({ block: 'center' })).catch(() => undefined);
+  // scrolled into view first. behavior MUST be 'instant': the default
+  // follows the page's CSS (this site sets scroll-behavior: smooth), which
+  // animates over ~300-500ms - reading boundingBox() right after scrolling
+  // then catches the row mid-animation and computes a stale coordinate that
+  // belongs to whatever row ends up there once the animation finishes.
+  await el.evaluate((node) => node.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => undefined);
   const box = await el.boundingBox();
   if (!box) throw new Error('element has no bounding box (not visible)');
   await humanClick(cursor, page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
@@ -68,18 +72,20 @@ export async function passBotChallenge(page: Page, cursor: GhostCursor): Promise
   log.step('reCAPTCHA');
   await idleWander(cursor, page);
 
-  log.info('[challenge] requesting solve from provider (can take 10-30s)...');
+  log.info(`[challenge] requesting solve from provider ${config.recaptcha.provider.id} (can take 10-30s)...`);
+  const startedAt = Date.now();
   const { captchas, solutions, error } = await page.solveRecaptchas();
+  const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
 
   if (captchas.length === 0) {
-    log.info('[challenge] no reCAPTCHA found, continuing');
+    log.info(`[challenge] no reCAPTCHA found, continuing (${elapsedSec}s)`);
     return;
   }
   if (error) {
-    throw new Error(`[challenge] solver error: ${error}`);
+    throw new Error(`[challenge] solver error after ${elapsedSec}s: ${error}`);
   }
 
-  log.info(`[challenge] solved ${solutions.length} captcha(s)`);
+  log.info(`[challenge] solved ${solutions.length} captcha(s) in ${elapsedSec}s`);
 }
 
 export async function acceptGatedForm(page: Page, cursor: GhostCursor): Promise<void> {
@@ -104,8 +110,11 @@ export async function acceptGatedForm(page: Page, cursor: GhostCursor): Promise<
   log.info('[accept] gated form accepted');
 }
 
-export async function selectReportAndSubmit(page: Page, cursor: GhostCursor): Promise<void> {
-  log.step('select report + submit');
+// split out from selectReportAndSubmit so callers can swap in a different
+// click mechanism for just the Submit button (e.g. a real OS-level click)
+// without duplicating the contract-selection/race-guard logic
+export async function selectReportAndGetSubmitButton(page: Page): Promise<ElementHandle> {
+  log.step('select report');
 
   const nativeSelect = await page
     .waitForSelector('select', { timeout: config.timeouts.tableMs })
@@ -123,12 +132,36 @@ export async function selectReportAndSubmit(page: Page, cursor: GhostCursor): Pr
   if (optionValue === null) {
     throw new Error(`[select] option "${config.dropdownOptionText}" not found - check config.dropdownOptionText`);
   }
-  await nativeSelect.select(optionValue);
+
+  // the report center refetches "criteria" asynchronously after mount and
+  // resets exchangeCodeAndContract to its default when the previous value
+  // isn't in the new criteria set - selecting once and moving on races that
+  // reset, leaving the form submitted with an empty contract (no request,
+  // no error, just silence). Re-assert the selection until it survives a
+  // settle window instead of trusting a single select() call.
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    await nativeSelect.select(optionValue);
+    await sleep(600);
+    const currentValue = await nativeSelect.evaluate((el) => (el as HTMLSelectElement).value);
+    if (currentValue === optionValue) break;
+    log.info(`[select] contract reset to "${currentValue}" after selecting, re-selecting (attempt ${attempt})`);
+    if (attempt === 5) {
+      throw new Error('[select] contract selection kept getting reset by the criteria refetch - giving up');
+    }
+  }
   log.info(`[select] chose "${config.dropdownOptionText}"`);
 
   const submitButton = await findButtonByExactText(page, config.submitButtonText, config.timeouts.tableMs);
   if (!submitButton) {
     throw new Error(`[select] submit button "${config.submitButtonText}" not found`);
+  }
+
+  // belt-and-suspenders: re-verify right before the click too, in case the
+  // reset fires on a slightly longer delay than the settle window above
+  const valueAtClickTime = await nativeSelect.evaluate((el) => (el as HTMLSelectElement).value);
+  if (valueAtClickTime !== optionValue) {
+    await nativeSelect.select(optionValue);
+    await sleep(600);
   }
 
   const deadline = Date.now() + config.timeouts.tableMs;
@@ -140,6 +173,11 @@ export async function selectReportAndSubmit(page: Page, cursor: GhostCursor): Pr
   }
   log.endProgress();
 
+  return submitButton;
+}
+
+export async function selectReportAndSubmit(page: Page, cursor: GhostCursor): Promise<void> {
+  const submitButton = await selectReportAndGetSubmitButton(page);
   await clickCenter(page, cursor, submitButton);
   log.info('[select] submitted');
 }
@@ -176,45 +214,86 @@ function clearDownloadDir(dir: string): void {
   }
 }
 
+// walks the actual results table row by row instead of scanning every
+// button/link on the page by text - deterministic top-to-bottom order tied
+// to real table structure, not an incidental match order
+async function findDownloadButtons(page: Page): Promise<ElementHandle[]> {
+  const table = await page.$('table');
+  if (!table) return [];
+
+  const rows = await table.$$('tbody tr');
+  const downloadButtons: ElementHandle[] = [];
+  for (const row of rows) {
+    const button = await row.$('button, a');
+    if (!button) continue;
+    const elText = await button.evaluate((node) => node.textContent?.trim()).catch(() => null);
+    if (elText?.startsWith(config.downloadButtonText)) downloadButtons.push(button);
+  }
+  return downloadButtons;
+}
+
 export async function downloadAllReports(page: Page, cursor: GhostCursor): Promise<string[]> {
   log.step('download reports');
   clearDownloadDir(config.downloadDir);
   await page.waitForNetworkIdle({ timeout: config.timeouts.tableMs }).catch(() => undefined);
 
-  const allLinksAndButtons = await page.$$('button, a');
-  const downloadButtons: ElementHandle[] = [];
-  for (const el of allLinksAndButtons) {
-    const elText = await el.evaluate((node) => node.textContent?.trim()).catch(() => null);
-    if (elText?.startsWith(config.downloadButtonText)) downloadButtons.push(el);
-  }
-  log.info(`[download] found ${downloadButtons.length} download button(s)`);
+  const total = (await findDownloadButtons(page)).length;
+  log.info(`[download] found ${total} download button(s)`);
 
   const saved: string[] = [];
 
-  for (const [index, button] of downloadButtons.entries()) {
+  for (let index = 0; index < total; index++) {
+    // re-query by index every time instead of holding onto handles from the
+    // initial scan - a click can trigger a table re-render (row order/count
+    // unaffected, but the old DOM nodes go stale and boundingBox() on them
+    // silently returns null further down the loop)
+    const button = (await findDownloadButtons(page))[index];
+    if (!button) {
+      log.warn(`[download] (${index + 1}/${total}) button vanished from the table, skipping`);
+      continue;
+    }
+
     // occasionally a click doesn't register a download in time (page still
     // settling, etc) - one retry clears almost all of these cheaply
     let fileName: string | null = null;
     for (let attempt = 1; attempt <= 2 && !fileName; attempt++) {
       // boundingBox() is viewport-relative - rows below the fold (this table
-      // can run to 7+ rows) need scrolling into view before it means anything
-      await button.evaluate((node) => node.scrollIntoView({ block: 'center' })).catch(() => undefined);
+      // can run to 7+ rows) need scrolling into view before it means
+      // anything. behavior: 'instant' matters here too - see clickCenter's
+      // comment above for why the default (CSS-driven smooth scroll) races
+      // this immediate boundingBox() read.
+      await button.evaluate((node) => node.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => undefined);
       const box = await button.boundingBox();
       if (!box) break;
 
       const before = snapshotDir(config.downloadDir);
+      // race the click's own response against the file-watch: a non-2xx
+      // (e.g. 409 from clicking too fast back-to-back) means no file is ever
+      // coming, so bail out instead of burning the full downloadMs timeout
+      const responsePromise = page
+        .waitForResponse((res) => /\/marketdata\/api\/reports\/\d+\/download\//.test(res.url()), {
+          timeout: config.timeouts.downloadMs,
+        })
+        .catch(() => null);
       await humanClick(cursor, page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+
+      const response = await responsePromise;
+      if (response && !response.ok()) {
+        log.warn(`[download] (${index + 1}/${total}) server returned ${response.status()}, not waiting for a file`);
+        break;
+      }
+
       fileName = await waitForNewStableFile(config.downloadDir, before, config.timeouts.downloadMs);
       if (!fileName && attempt === 1) {
-        log.warn(`[download] (${index + 1}/${downloadButtons.length}) no file detected, retrying once`);
+        log.warn(`[download] (${index + 1}/${total}) no file detected, retrying once`);
       }
     }
 
     if (fileName) {
-      log.info(`[download] (${index + 1}/${downloadButtons.length}) saved ${fileName}`);
+      log.info(`[download] (${index + 1}/${total}) saved ${fileName}`);
       saved.push(fileName);
     } else {
-      log.warn(`[download] (${index + 1}/${downloadButtons.length}) no file detected after retry`);
+      log.warn(`[download] (${index + 1}/${total}) no file detected after retry`);
     }
   }
 

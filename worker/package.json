@@ -12,6 +12,7 @@
     "start:server": "node dist/server.js"
   },
   "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
