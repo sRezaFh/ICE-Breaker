@@ -1,5 +1,6 @@
 import { createCursor, type GhostCursor } from 'ghost-cursor';
 import type { Page, ElementHandle } from 'puppeteer';
+import { log } from './log.js';
 
 export function makeCursor(page: Page, visible: boolean): GhostCursor {
   // visible: true draws an actual on-page dot following the cursor
@@ -41,6 +42,7 @@ export async function humanClick(
   page: Page,
   target: ElementHandle | { x: number; y: number },
 ): Promise<void> {
+  const startedAt = Date.now();
   // every click drifts a bit first, not just the captcha step - ghost-cursor
   // already curves each move, but a click right after a long idle wait with
   // zero prior motion is its own tell
@@ -55,6 +57,7 @@ export async function humanClick(
   } else {
     await cursor.click(target, { moveSpeed: 100 });
   }
+  log.info(`[cursor] humanClick took ${Date.now() - startedAt}ms`);
 }
 
 export function sleep(ms: number): Promise<void> {

@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Page, ElementHandle } from 'puppeteer';
+import type { Browser, Page, ElementHandle } from 'puppeteer';
 import type { GhostCursor } from 'ghost-cursor';
 import { config } from './config.js';
 import { humanClick, idleWander, sleep } from './cursor.js';
 import { log } from './log.js';
+import { osClickElement } from './osClick.js';
 
 async function clickCenter(page: Page, cursor: GhostCursor, el: ElementHandle): Promise<void> {
   // boundingBox() is viewport-relative - rows below the fold (the download
@@ -63,10 +64,6 @@ function locateBySelector(page: Page, selector: string): Locator {
   };
 }
 
-function locateByExactText(page: Page, text: string): Locator {
-  return () => findVisibleButtonNow(page, text);
-}
-
 // polls instead of a blind fixed sleep - returns as soon as the element is
 // actually gone rather than always paying the full settle time
 async function waitUntilGone(locate: Locator, timeoutMs: number): Promise<boolean> {
@@ -118,20 +115,130 @@ export async function acceptCookieBanner(page: Page, cursor: GhostCursor): Promi
   log.info('[cookies] accepted and confirmed gone');
 }
 
+// ---- generic overlay detection & dismissal ----
+// this site reuses the same "I Accept" label at three separate gates
+// (disclaimer, gated-post-captcha form, and a recheck before download) -
+// matching by text across the whole page can't tell which one is actually
+// showing, which is how the wrong-modal misclick happened. Scoping the
+// button search to the frontmost overlay's own container fixes that: no
+// matter which of the three points fires, or whether one re-renders, the
+// same detect-container -> click-its-button -> confirm-gone loop handles it.
+
+// heuristic for "the modal currently blocking the page": a visible,
+// fixed/absolute-positioned element that either declares itself a dialog
+// (role="dialog"/aria-modal="true", which wins outright) or is large enough
+// to plausibly be a full-page overlay (>=15% of the viewport) - among
+// non-dialog candidates the highest CSS z-index wins
+async function findFrontmostOverlay(page: Page): Promise<ElementHandle | null> {
+  const handle = await page.evaluateHandle(() => {
+    const viewportArea = window.innerWidth * window.innerHeight;
+    let best: Element | null = null;
+    let bestScore = -Infinity;
+    for (const el of Array.from(document.querySelectorAll('body *'))) {
+      const style = getComputedStyle(el);
+      if (style.position !== 'fixed' && style.position !== 'absolute') continue;
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+      const isDialog = el.getAttribute('role') === 'dialog' || el.getAttribute('aria-modal') === 'true';
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+      if (!isDialog && rect.width * rect.height < viewportArea * 0.15) continue;
+      const z = Number(style.zIndex) || 0;
+      const score = isDialog ? 1_000_000 + z : z;
+      if (score > bestScore) {
+        best = el;
+        bestScore = score;
+      }
+    }
+    return best;
+  });
+  const el = handle.asElement();
+  if (!el) {
+    await handle.dispose();
+    return null;
+  }
+  return el as ElementHandle;
+}
+
+// the overlay's primary action: a preferred-text match (checked in priority
+// order) or, failing that, the lone visible interactive element - never
+// guesses between multiple unlabeled candidates
+async function findPrimaryButtonIn(container: ElementHandle, preferredTexts: string[]): Promise<ElementHandle | null> {
+  const candidates = await container.$$('button, a, [role="button"]');
+  const visible: { el: ElementHandle; text: string | null }[] = [];
+  for (const el of candidates) {
+    const box = await el.boundingBox().catch(() => null);
+    if (!box) continue;
+    const text = await el.evaluate((n) => n.textContent?.trim() || null).catch(() => null);
+    visible.push({ el, text });
+  }
+  for (const wanted of preferredTexts) {
+    const match = visible.find((c) => c.text === wanted);
+    if (match) return match.el;
+  }
+  return visible.length === 1 ? visible[0].el : null;
+}
+
+async function anyOverlayVisible(page: Page): Promise<boolean> {
+  const overlay = await findFrontmostOverlay(page);
+  if (!overlay) return false;
+  await overlay.dispose();
+  return true;
+}
+
+// clicks the frontmost overlay's primary button, confirms it's actually
+// gone, retries if it re-renders - returns false (not a throw) when there
+// was nothing to dismiss, so callers can treat this as "already clear"
+export async function dismissTopmostOverlay(
+  page: Page,
+  cursor: GhostCursor,
+  preferredTexts: string[],
+  label: string,
+  maxAttempts = 4,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const overlay = await findFrontmostOverlay(page);
+    if (!overlay) return attempt > 1;
+
+    const button = await findPrimaryButtonIn(overlay, preferredTexts);
+    await overlay.dispose();
+    if (!button) {
+      log.warn(`[${label}] overlay detected but no actionable button found inside it`);
+      return false;
+    }
+
+    await clickCenter(page, cursor, button);
+    if (!(await waitForFalse(() => anyOverlayVisible(page), 2000))) {
+      log.warn(`[${label}] overlay still present after click, retrying (attempt ${attempt}/${maxAttempts})`);
+      continue;
+    }
+    return true;
+  }
+  return !(await anyOverlayVisible(page));
+}
+
+// same poll-until-false shape as waitUntilGone, generalized over a
+// predicate instead of a single locator
+async function waitForFalse(predicate: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (!(await predicate())) return true;
+    await sleep(100);
+  } while (Date.now() < deadline);
+  return !(await predicate());
+}
+
 export async function acceptDisclaimerModal(page: Page, cursor: GhostCursor): Promise<void> {
   log.step('disclaimer modal');
-  // the disclaimer modal's "I Accept" is the only match at this point - the
-  // second one (gated behind the captcha) doesn't exist in the DOM yet
-  const button = await findButtonByExactText(page, config.acceptButtonText, config.timeouts.challengeMs);
-
-  if (!button) {
-    log.warn('[disclaimer] no modal accept button appeared, continuing');
-    return;
+  const deadline = Date.now() + config.timeouts.challengeMs;
+  while (!(await anyOverlayVisible(page)) && Date.now() < deadline) {
+    log.progress(`waiting for disclaimer modal... (${Math.round((deadline - Date.now()) / 1000)}s left)`);
+    await sleep(300);
   }
+  log.endProgress();
 
-  const cleared = await dismissUntilGone(page, cursor, locateByExactText(page, config.acceptButtonText), 'disclaimer');
+  const cleared = await dismissTopmostOverlay(page, cursor, [config.acceptButtonText], 'disclaimer');
   if (!cleared) {
-    log.warn('[disclaimer] modal still present after retries, continuing anyway');
+    log.warn('[disclaimer] no modal accept button appeared, continuing');
     return;
   }
   log.info('[disclaimer] accepted and confirmed gone');
@@ -159,7 +266,31 @@ export async function passBotChallenge(page: Page, cursor: GhostCursor): Promise
 
   log.info(`[challenge] requesting solve from provider ${config.recaptcha.provider.id} (can take 10-30s)...`);
   const startedAt = Date.now();
-  const { captchas, solutions, solved, error } = await page.solveRecaptchas();
+
+  // page.solveRecaptchas() has no timeout of its own - observed it hang
+  // silently for 10+ minutes once with zero output, indistinguishable from a
+  // dead process without this. A heartbeat during the wait plus a hard
+  // ceiling turns a silent hang into a loud, timely failure.
+  const heartbeat = setInterval(() => {
+    log.progress(`[challenge] still waiting on provider ${config.recaptcha.provider.id}... (${Math.round((Date.now() - startedAt) / 1000)}s elapsed)`);
+  }, 5000);
+
+  let result: Awaited<ReturnType<Page['solveRecaptchas']>>;
+  try {
+    result = await Promise.race([
+      page.solveRecaptchas(),
+      sleep(config.timeouts.captchaSolveMs).then((): never => {
+        throw new Error(
+          `[challenge] provider ${config.recaptcha.provider.id} did not respond within ${config.timeouts.captchaSolveMs}ms - aborting rather than hanging indefinitely`,
+        );
+      }),
+    ]);
+  } finally {
+    clearInterval(heartbeat);
+    log.endProgress();
+  }
+
+  const { captchas, solutions, solved, error } = result;
   const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
 
   if (captchas.length === 0) {
@@ -205,16 +336,24 @@ export async function passBotChallenge(page: Page, cursor: GhostCursor): Promise
   log.info(`[challenge] solved ${solutions.length} captcha(s) in ${elapsedSec}s`);
 }
 
+// unlike the disclaimer and the pre-download recheck, this gate is NOT a
+// floating overlay - confirmed via debug/fresh-*.png screenshots, it's
+// plain inline page content (the recaptcha checkbox + "I Accept" sit
+// directly in the page flow, no dialog box, no backdrop). Overlay-scoping
+// this one finds nothing and hangs for the full timeout every time. A
+// page-wide exact-text search is safe here specifically because by this
+// point the disclaimer overlay is already confirmed gone (see
+// acceptDisclaimerModal) - there's no second "I Accept" left to collide with.
 export async function acceptGatedForm(page: Page, cursor: GhostCursor): Promise<void> {
   log.step('gated accept button');
-  const button = await findButtonByExactText(page, config.acceptButtonText, config.timeouts.challengeMs);
+  const deadline = Date.now() + config.timeouts.challengeMs;
 
+  const button = await findButtonByExactText(page, config.acceptButtonText, config.timeouts.challengeMs);
   if (!button) {
     log.warn('[accept] no gated accept button found, continuing');
     return;
   }
 
-  const deadline = Date.now() + config.timeouts.challengeMs;
   while (Date.now() < deadline) {
     const disabled = await button.evaluate((el) => (el as HTMLButtonElement).disabled).catch(() => false);
     if (!disabled) break;
@@ -224,11 +363,10 @@ export async function acceptGatedForm(page: Page, cursor: GhostCursor): Promise<
   log.endProgress();
 
   await clickCenter(page, cursor, button);
-  const locate = locateByExactText(page, config.acceptButtonText);
-  const cleared = await waitUntilGone(locate, 2000);
-  if (!cleared) {
-    log.warn('[accept] gated modal still present after click, retrying');
-    await dismissUntilGone(page, cursor, locate, 'accept');
+  const stillThere = async () => (await findVisibleButtonNow(page, config.acceptButtonText)) !== null;
+  if (!(await waitForFalse(stillThere, 2000))) {
+    log.warn('[accept] gated accept button still present after click, retrying');
+    await dismissUntilGone(page, cursor, () => findVisibleButtonNow(page, config.acceptButtonText), 'accept');
   }
   log.info('[accept] gated form accepted');
 }
@@ -238,12 +376,11 @@ export async function acceptGatedForm(page: Page, cursor: GhostCursor): Promise<
 // the button underneath, so re-check right before downloading rather than
 // trusting the accepts earlier in the flow to have been the last word
 export async function ensureDisclaimerCleared(page: Page, cursor: GhostCursor): Promise<void> {
-  const stillUp = await findVisibleButtonNow(page, config.acceptButtonText);
-  if (!stillUp) return;
+  if (!(await anyOverlayVisible(page))) return;
 
   log.step('disclaimer recheck');
-  log.warn('[disclaimer] modal reappeared before download, dismissing again');
-  const cleared = await dismissUntilGone(page, cursor, locateByExactText(page, config.acceptButtonText), 'disclaimer-recheck');
+  log.warn('[disclaimer] an overlay reappeared before download, dismissing again');
+  const cleared = await dismissTopmostOverlay(page, cursor, [config.acceptButtonText], 'disclaimer-recheck');
   if (!cleared) {
     throw new Error('[disclaimer] modal still blocking the page after retries - aborting before download');
   }
@@ -316,10 +453,15 @@ export async function selectReportAndGetSubmitButton(page: Page): Promise<Elemen
   return submitButton;
 }
 
-export async function selectReportAndSubmit(page: Page, cursor: GhostCursor): Promise<void> {
+// ICE gates report generation behind a check that distinguishes a genuine
+// hardware mouse click from a CDP-simulated one, even within the same
+// automated session that solved the captcha fine - every other click in
+// this flow uses the CDP/ghost-cursor path fine, only this one needs the
+// real-input path (see osClick.ts)
+export async function selectReportAndSubmit(page: Page, browser: Browser, cursor: GhostCursor): Promise<void> {
   const submitButton = await selectReportAndGetSubmitButton(page);
-  await clickCenter(page, cursor, submitButton);
-  log.info('[select] submitted');
+  await osClickElement(page, browser, submitButton);
+  log.info('[select] submitted (real OS-level click)');
 }
 
 function snapshotDir(dir: string): Set<string> {

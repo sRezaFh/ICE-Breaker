@@ -1,13 +1,24 @@
 import { execFileSync } from 'node:child_process';
 import type { Page } from 'puppeteer';
 import type { Browser as PuppeteerBrowser } from 'puppeteer';
+import { log } from './log.js';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
 
 // Windows blocks background processes from stealing foreground focus
 // (SetForegroundWindow silently no-ops) unless the caller recently sent
 // real input - CDP's Page.bringToFront() doesn't count. The classic
 // workaround: nudge Alt right before the call, which Windows treats as
-// "user just interacted" and relaxes the lock for that one call.
-export function forceForegroundByPid(pid: number): boolean {
+// "user just interacted" and relaxes the lock for that one call. X11 (the
+// Linux/Xvfb runtime) has no equivalent lock for a single-window session,
+// so this is Windows-only - callers should skip it elsewhere.
+function forceForegroundByPidWindows(pid: number): boolean {
   const script = `
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type @"
@@ -54,14 +65,6 @@ export function forceForegroundByPid(pid: number): boolean {
   return result.trim() === 'True';
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function catwalkTo(targetX: number, targetY: number): Promise<void> {
   const { mouse, straightTo, Point, screen } = await import('@nut-tree-fork/nut-js');
   const screenWidth = await screen.width();
@@ -83,20 +86,32 @@ async function catwalkTo(targetX: number, targetY: number): Promise<void> {
 }
 
 // clicks an element with a genuine OS-level input event instead of CDP's
-// Input.dispatchMouseEvent - see debug/test-realclick.ts for why this
-// matters: ICE's Submit action appears to require it
+// Input.dispatchMouseEvent - ICE's report-generation Submit rejects a
+// CDP-simulated click even within a session that solved the captcha fine
+// (confirmed in debug/test-realclick.ts against a neutral test button, then
+// end-to-end against the real Submit button)
 export async function osClickElement(
   page: Page,
   browser: PuppeteerBrowser,
   el: { boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null> },
 ): Promise<void> {
+  if (process.platform === 'linux' && !process.env.DISPLAY) {
+    throw new Error(
+      '[osClick] no DISPLAY set - a real OS-level click needs a real X server; run under xvfb-run (see worker/Dockerfile)',
+    );
+  }
+
+  const startedAt = Date.now();
   const { mouse } = await import('@nut-tree-fork/nut-js');
 
   await page.bringToFront();
-  const pid = browser.process()?.pid;
-  if (pid) {
-    const focused = forceForegroundByPid(pid);
-    if (!focused) throw new Error('[osClick] could not bring browser window to OS foreground');
+  if (process.platform === 'win32') {
+    const pid = browser.process()?.pid;
+    if (pid) {
+      const focused = forceForegroundByPidWindows(pid);
+      if (!focused) throw new Error('[osClick] could not bring browser window to OS foreground');
+      log.info(`[osClick] brought window to OS foreground (${Date.now() - startedAt}ms in)`);
+    }
   }
   await sleep(300);
 
@@ -120,4 +135,5 @@ export async function osClickElement(
   await catwalkTo(targetX, targetY);
   await sleep(200 + Math.random() * 200);
   await mouse.leftClick();
+  log.info(`[osClick] real OS-level click dispatched (${Date.now() - startedAt}ms total)`);
 }

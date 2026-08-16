@@ -9,7 +9,7 @@ import {
   selectReportAndGetSubmitButton,
   downloadAllReports,
 } from '../src/flow.js';
-import { osClickElement } from './osClickHelper.js';
+import { osClickElement } from '../src/osClick.js';
 import { config } from '../src/config.js';
 
 async function main(): Promise<void> {

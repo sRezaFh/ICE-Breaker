@@ -23,25 +23,24 @@ export async function runScrape(onFrame?: FrameHandler): Promise<RunResult> {
 
   const stopScreencast = onFrame ? await startScreencast(page, onFrame) : null;
 
+  const runStartedAt = Date.now();
   try {
-    log.step(`navigating to ${config.targetUrl}`);
-    await page.goto(config.targetUrl, {
-      waitUntil: 'networkidle2',
-      timeout: config.timeouts.navigationMs,
-    });
+    await log.timed(`navigate to ${config.targetUrl}`, () =>
+      page.goto(config.targetUrl, { waitUntil: 'networkidle2', timeout: config.timeouts.navigationMs }),
+    );
 
-    await acceptCookieBanner(page, cursor);
-    await acceptDisclaimerModal(page, cursor);
-    await passBotChallenge(page, cursor);
-    await acceptGatedForm(page, cursor);
-    await selectReportAndSubmit(page, cursor);
-    await ensureDisclaimerCleared(page, cursor);
-    const saved = await downloadAllReports(page, cursor);
+    await log.timed('cookie banner', () => acceptCookieBanner(page, cursor));
+    await log.timed('disclaimer modal', () => acceptDisclaimerModal(page, cursor));
+    await log.timed('reCAPTCHA', () => passBotChallenge(page, cursor));
+    await log.timed('gated accept', () => acceptGatedForm(page, cursor));
+    await log.timed('select + submit', () => selectReportAndSubmit(page, browser, cursor));
+    await log.timed('disclaimer recheck', () => ensureDisclaimerCleared(page, cursor));
+    const saved = await log.timed('download reports', () => downloadAllReports(page, cursor));
 
-    log.step(`done - ${saved.length} file(s) saved to ${config.downloadDir}`);
+    log.step(`done - ${saved.length} file(s) saved to ${config.downloadDir} (${Date.now() - runStartedAt}ms total)`);
     return { saved };
   } catch (err) {
-    log.step(`FAILED at the point above - ${(err as Error).message}`);
+    log.step(`FAILED at the point above - ${(err as Error).message} (${Date.now() - runStartedAt}ms in)`);
     throw err;
   } finally {
     if (stopScreencast) await stopScreencast();

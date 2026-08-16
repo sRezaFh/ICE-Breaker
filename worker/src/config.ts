@@ -48,5 +48,10 @@ export const config = {
     challengeMs: 60_000,
     tableMs: 20_000,
     downloadMs: 30_000,
+    // the 2captcha provider call itself has no built-in bound and can hang
+    // silently well past its usual 10-30s (observed once at 10+ minutes with
+    // zero progress output) - this caps it so a stuck provider fails loudly
+    // instead of hanging the whole run
+    captchaSolveMs: 120_000,
   },
 } as const;

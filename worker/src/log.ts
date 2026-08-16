@@ -44,4 +44,16 @@ function endProgress(): void {
   process.stdout.write('\n');
 }
 
-export const log = { step, info, warn, progress, endProgress };
+// wraps a phase so its duration is always logged, success or throw - lets a
+// developer scanning the log see exactly where time went without having to
+// diff timestamps between step() lines by hand
+async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await fn();
+  } finally {
+    info(`[timing] ${label} took ${Date.now() - startedAt}ms`);
+  }
+}
+
+export const log = { step, info, warn, progress, endProgress, timed };

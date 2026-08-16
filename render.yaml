@@ -1,11 +1,15 @@
 services:
+  # Docker runtime (not Render's native Node runtime): the Submit click needs
+  # a real OS-level input event (see worker/src/osClick.ts), which needs a
+  # real X server to click into - worker/Dockerfile installs Xvfb and runs
+  # Chrome headed (HEADLESS=false) against it via xvfb-run. Render's native
+  # Node runtime has no apt access to install Xvfb, hence the switch.
   - type: web
     name: ice-report-scraper-worker
-    runtime: node
+    runtime: docker
     plan: free
     rootDir: worker
-    buildCommand: npm install && npx puppeteer browsers install chrome && npm run build
-    startCommand: npm run start:server
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: TWOCAPTCHA_API_KEY
         sync: false
@@ -15,10 +19,3 @@ services:
         sync: false
       - key: GITHUB_REPO
         sync: false
-      - key: HEADLESS
-        value: "true"
-      # Render's build and runtime steps don't reliably share puppeteer's
-      # default cache dir ($HOME/.cache) - pinning it under the project's own
-      # persistent directory keeps the Chrome install visible at runtime
-      - key: PUPPETEER_CACHE_DIR
-        value: /opt/render/project/.cache/puppeteer
