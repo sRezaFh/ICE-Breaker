@@ -4,7 +4,7 @@ services:
   # real X server to click into - worker/Dockerfile installs Xvfb and runs
   # Chrome headed (HEADLESS=false) against it via xvfb-run. Render's native
   # Node runtime has no apt access to install Xvfb, hence the switch.
-  - type: worker
+  - type: web
     name: ice-report-scraper-worker
     runtime: docker
     plan: free
