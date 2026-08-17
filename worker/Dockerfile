@@ -34,4 +34,10 @@ ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
 
 # --auto-servernum picks a free display number - fixed :99 races a leftover
 # lock file across restarts on the same instance
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x900x24", "npm", "run", "start:server"]
+#
+# TEMP DIAGNOSTIC: xvfb-run silently hangs somewhere before exec'ing the app
+# on Render (zero output at all, not even npm's own lines). Bypass the
+# xvfb-run wrapper and start Xvfb manually with explicit progress markers so
+# the next deploy log shows exactly which step never completes. Revert to
+# xvfb-run once the real cause is found.
+CMD ["sh", "-c", "echo DIAG_1_STARTING_XVFB; Xvfb :99 -screen 0 1280x900x24 & echo DIAG_2_XVFB_PID=$!; sleep 2; echo DIAG_3_SET_DISPLAY; export DISPLAY=:99; echo DIAG_4_LAUNCHING_APP; npm run start:server"]
