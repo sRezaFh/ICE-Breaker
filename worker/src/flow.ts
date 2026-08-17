@@ -522,6 +522,18 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
   const total = (await findDownloadButtons(page)).length;
   log.info(`[download] found ${total} download button(s)`);
 
+  // an empty table has more than one possible cause (no reports left today,
+  // a prior run's downloads exhausted a quota, the page rendered differently
+  // than expected) - log enough of the actual page state to tell which,
+  // instead of guessing blind on the next run
+  if (total === 0) {
+    const tableRowCount = await page.$$eval('table tbody tr', (rows) => rows.length).catch(() => -1);
+    const bodyText = await page
+      .$eval('body', (el) => el.innerText.replace(/\s+/g, ' ').trim().slice(0, 500))
+      .catch(() => '(could not read body text)');
+    log.warn(`[download] table has ${tableRowCount} row(s) with no matching button - page text: "${bodyText}"`);
+  }
+
   const saved: string[] = [];
 
   for (let index = 0; index < total; index++) {
