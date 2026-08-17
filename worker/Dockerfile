@@ -26,11 +26,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
 
-COPY . .
-RUN npx puppeteer browsers install chrome && npm run build
-
 ENV HEADLESS=false
 ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
+
+COPY . .
+RUN npx puppeteer browsers install chrome && npm run build
 
 # --auto-servernum picks a free display number - fixed :99 races a leftover
 # lock file across restarts on the same instance
