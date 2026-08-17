@@ -15,6 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxtst6 libpng16-16 xdg-utils \
   && rm -rf /var/lib/apt/lists/*
 
+# xvfb-run creates its X11 socket here - the xvfb package doesn't create this
+# dir on its own in a minimal image with no init system, so without it
+# xvfb-run hangs forever trying to acquire a display and never execs the app,
+# which is why nothing (not even npm's own output) ever reached the logs
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./
