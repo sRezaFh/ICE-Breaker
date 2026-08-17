@@ -32,6 +32,8 @@ ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
 COPY . .
 RUN npx puppeteer browsers install chrome && npm run build
 
-# --auto-servernum picks a free display number - fixed :99 races a leftover
-# lock file across restarts on the same instance
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x900x24", "npm", "run", "start:server"]
+# xvfb-run itself hangs indefinitely on Render's container runtime even with
+# /tmp/.X11-unix present (confirmed by bisecting with explicit step markers,
+# nothing past its own display-acquire wait loop ever ran) - start Xvfb
+# directly instead and give it a moment to create its socket before launching
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x900x24 & sleep 1; DISPLAY=:99 npm run start:server"]
