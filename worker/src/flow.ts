@@ -552,25 +552,25 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
   await page.waitForNetworkIdle({ timeout: config.timeouts.tableMs }).catch(() => undefined);
 
   const debugFiles: string[] = [];
+
+  // waitForNetworkIdle settling doesn't mean the results table has actually
+  // rendered yet (confirmed: 0 buttons immediately after, 7 buttons 3s
+  // later with zero other change) - poll for real instead of trusting one
+  // snapshot right after network idle
+  const pollDeadline = Date.now() + config.timeouts.tableMs;
   let total = (await findDownloadButtons(page)).length;
+  while (total === 0 && Date.now() < pollDeadline) {
+    await sleep(500);
+    total = (await findDownloadButtons(page)).length;
+  }
   log.info(`[download] found ${total} download button(s)`);
 
-  // an empty table has more than one possible cause (no reports left today,
-  // a prior run's downloads exhausted a quota, the page rendered differently
-  // than expected, results not settled yet) - export the actual page state
-  // instead of guessing blind from log snippets, then give it a moment to
-  // settle and check again before concluding there's really nothing there
+  // still nothing after polling the full timeout - a real empty state (no
+  // reports left today, quota, wrong page), export the actual page state
+  // instead of guessing blind from log snippets
   if (total === 0) {
-    log.warn('[download] 0 buttons found, dumping page state before waiting and rechecking');
-    debugFiles.push(...(await dumpPageState(page, 'immediate')));
-
-    await sleep(3000);
-    total = (await findDownloadButtons(page)).length;
-    log.info(`[download] after 3s wait, found ${total} download button(s)`);
-
-    if (total === 0) {
-      debugFiles.push(...(await dumpPageState(page, 'after-wait')));
-    }
+    log.warn('[download] still 0 buttons after polling, dumping page state');
+    debugFiles.push(...(await dumpPageState(page, 'empty')));
   }
 
   const saved: string[] = [];
