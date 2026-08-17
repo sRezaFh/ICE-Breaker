@@ -496,20 +496,24 @@ function clearDownloadDir(dir: string): void {
   }
 }
 
-// walks the actual results table row by row instead of scanning every
-// button/link on the page by text - deterministic top-to-bottom order tied
-// to real table structure, not an incidental match order
+// walks table rows row by row instead of scanning every button/link on the
+// page by text - deterministic top-to-bottom order tied to real table
+// structure, not an incidental match order. Scans every table on the page,
+// not just the first: the page also renders a "Reports" category browse
+// table, and depending on load timing it can land earlier in the DOM than
+// the actual results table, which meant page.$('table') sometimes grabbed
+// the wrong one and reported zero matching buttons
 async function findDownloadButtons(page: Page): Promise<ElementHandle[]> {
-  const table = await page.$('table');
-  if (!table) return [];
-
-  const rows = await table.$$('tbody tr');
+  const tables = await page.$$('table');
   const downloadButtons: ElementHandle[] = [];
-  for (const row of rows) {
-    const button = await row.$('button, a');
-    if (!button) continue;
-    const elText = await button.evaluate((node) => node.textContent?.trim()).catch(() => null);
-    if (elText?.startsWith(config.downloadButtonText)) downloadButtons.push(button);
+  for (const table of tables) {
+    const rows = await table.$$('tbody tr');
+    for (const row of rows) {
+      const button = await row.$('button, a');
+      if (!button) continue;
+      const elText = await button.evaluate((node) => node.textContent?.trim()).catch(() => null);
+      if (elText?.startsWith(config.downloadButtonText)) downloadButtons.push(button);
+    }
   }
   return downloadButtons;
 }
