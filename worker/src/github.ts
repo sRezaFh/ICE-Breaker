@@ -46,6 +46,19 @@ export async function uploadToGitHubRelease(downloadDir: string, fileNames: stri
   const release = (await createRes.json()) as { upload_url: string };
   const uploadUrlBase = release.upload_url.replace('{?name,label}', '');
 
+  const contentTypeFor = (fileName: string): string => {
+    switch (path.extname(fileName)) {
+      case '.pdf':
+        return 'application/pdf';
+      case '.html':
+        return 'text/html';
+      case '.png':
+        return 'image/png';
+      default:
+        return 'application/octet-stream';
+    }
+  };
+
   const assets: ReleaseAsset[] = [];
   for (const fileName of fileNames) {
     const filePath = path.join(downloadDir, fileName);
@@ -54,7 +67,7 @@ export async function uploadToGitHubRelease(downloadDir: string, fileNames: stri
     log.info(`[github] uploading ${fileName}`);
     const uploadRes = await githubRequest(`${uploadUrlBase}?name=${encodeURIComponent(fileName)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/pdf' },
+      headers: { 'Content-Type': contentTypeFor(fileName) },
       body: fileBuffer,
     });
     const asset = (await uploadRes.json()) as { browser_download_url: string };

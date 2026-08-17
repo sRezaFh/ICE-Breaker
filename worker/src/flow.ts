@@ -498,24 +498,52 @@ function clearDownloadDir(dir: string): void {
 
 // walks table rows row by row instead of scanning every button/link on the
 // page by text - deterministic top-to-bottom order tied to real table
-// structure, not an incidental match order. Scans every table on the page,
-// not just the first: the page also renders a "Reports" category browse
-// table, and depending on load timing it can land earlier in the DOM than
-// the actual results table, which meant page.$('table') sometimes grabbed
-// the wrong one and reported zero matching buttons
+// structure, not an incidental match order. Scans every table in every
+// frame, not just the top-level document: the real results table is
+// rendered inside an iframe (confirmed - a screenshot showed real Download
+// buttons on screen while page.$$('table') on the main frame kept finding
+// zero, since it can't see into iframe content at all)
 async function findDownloadButtons(page: Page): Promise<ElementHandle[]> {
-  const tables = await page.$$('table');
   const downloadButtons: ElementHandle[] = [];
-  for (const table of tables) {
-    const rows = await table.$$('tbody tr');
-    for (const row of rows) {
-      const button = await row.$('button, a');
-      if (!button) continue;
-      const elText = await button.evaluate((node) => node.textContent?.trim()).catch(() => null);
-      if (elText?.startsWith(config.downloadButtonText)) downloadButtons.push(button);
+  for (const frame of page.frames()) {
+    const tables = await frame.$$('table').catch(() => []);
+    for (const table of tables) {
+      const rows = await table.$$('tbody tr');
+      for (const row of rows) {
+        const button = await row.$('button, a');
+        if (!button) continue;
+        const elText = await button.evaluate((node) => node.textContent?.trim()).catch(() => null);
+        if (elText?.startsWith(config.downloadButtonText)) downloadButtons.push(button);
+      }
     }
   }
   return downloadButtons;
+}
+
+// writes every frame's full HTML plus a full-page screenshot into
+// downloadDir so they ride along on the normal GitHub-release upload path -
+// the only way to actually see what Puppeteer sees inside the deployed
+// container, instead of guessing from log snippets
+async function dumpPageState(page: Page, label: string): Promise<string[]> {
+  const files: string[] = [];
+  const frames = page.frames();
+  for (let i = 0; i < frames.length; i++) {
+    const html = await frames[i]
+      .content()
+      .catch((err) => `<!-- could not read frame content: ${(err as Error).message} -->`);
+    const fileName = `debug-${label}-frame${i}.html`;
+    fs.writeFileSync(path.join(config.downloadDir, fileName), html);
+    files.push(fileName);
+    log.warn(`[debug] frame ${i} url=${frames[i].url() || '(about:blank)'} -> ${fileName}`);
+  }
+
+  const screenshotName = `debug-${label}-screenshot.png`;
+  await page
+    .screenshot({ path: path.join(config.downloadDir, screenshotName) as `${string}.png`, fullPage: true })
+    .catch((err) => log.warn(`[debug] screenshot failed: ${(err as Error).message}`));
+  files.push(screenshotName);
+
+  return files;
 }
 
 export async function downloadAllReports(page: Page, cursor: GhostCursor): Promise<string[]> {
@@ -523,19 +551,26 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
   clearDownloadDir(config.downloadDir);
   await page.waitForNetworkIdle({ timeout: config.timeouts.tableMs }).catch(() => undefined);
 
-  const total = (await findDownloadButtons(page)).length;
+  const debugFiles: string[] = [];
+  let total = (await findDownloadButtons(page)).length;
   log.info(`[download] found ${total} download button(s)`);
 
   // an empty table has more than one possible cause (no reports left today,
   // a prior run's downloads exhausted a quota, the page rendered differently
-  // than expected) - log enough of the actual page state to tell which,
-  // instead of guessing blind on the next run
+  // than expected, results not settled yet) - export the actual page state
+  // instead of guessing blind from log snippets, then give it a moment to
+  // settle and check again before concluding there's really nothing there
   if (total === 0) {
-    const tableRowCount = await page.$$eval('table tbody tr', (rows) => rows.length).catch(() => -1);
-    const bodyText = await page
-      .$eval('body', (el) => el.innerText.replace(/\s+/g, ' ').trim().slice(0, 500))
-      .catch(() => '(could not read body text)');
-    log.warn(`[download] on ${page.url()}, table has ${tableRowCount} row(s) with no matching button - page text: "${bodyText}"`);
+    log.warn('[download] 0 buttons found, dumping page state before waiting and rechecking');
+    debugFiles.push(...(await dumpPageState(page, 'immediate')));
+
+    await sleep(3000);
+    total = (await findDownloadButtons(page)).length;
+    log.info(`[download] after 3s wait, found ${total} download button(s)`);
+
+    if (total === 0) {
+      debugFiles.push(...(await dumpPageState(page, 'after-wait')));
+    }
   }
 
   const saved: string[] = [];
@@ -616,5 +651,5 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
     }
   }
 
-  return saved;
+  return [...saved, ...debugFiles];
 }
