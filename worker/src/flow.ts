@@ -531,7 +531,7 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
     const bodyText = await page
       .$eval('body', (el) => el.innerText.replace(/\s+/g, ' ').trim().slice(0, 500))
       .catch(() => '(could not read body text)');
-    log.warn(`[download] table has ${tableRowCount} row(s) with no matching button - page text: "${bodyText}"`);
+    log.warn(`[download] on ${page.url()}, table has ${tableRowCount} row(s) with no matching button - page text: "${bodyText}"`);
   }
 
   const saved: string[] = [];
