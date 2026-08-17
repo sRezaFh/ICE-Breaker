@@ -1,5 +1,6 @@
 import { createCursor, type GhostCursor } from 'ghost-cursor';
 import type { Page, ElementHandle } from 'puppeteer';
+import { config } from './config.js';
 import { log } from './log.js';
 
 export function makeCursor(page: Page, visible: boolean): GhostCursor {
@@ -17,7 +18,7 @@ function clamp(value: number, min: number, max: number): number {
 // wanders locally with the occasional bigger step, it doesn't jump corner to
 // corner of the page before every click
 export async function idleWander(cursor: GhostCursor, page: Page, steps = 3): Promise<void> {
-  const viewport = page.viewport() ?? { width: 1280, height: 800 };
+  const viewport = page.viewport() ?? config.viewport;
   let { x, y } = cursor.getLocation();
 
   for (let i = 0; i < steps; i++) {

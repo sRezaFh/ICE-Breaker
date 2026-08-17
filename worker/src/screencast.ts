@@ -1,4 +1,5 @@
 import type { Page } from 'puppeteer';
+import { config } from './config.js';
 
 export type FrameHandler = (base64Jpeg: string) => void;
 
@@ -15,8 +16,8 @@ export async function startScreencast(page: Page, onFrame: FrameHandler): Promis
   await client.send('Page.startScreencast', {
     format: 'jpeg',
     quality: 60,
-    maxWidth: 1280,
-    maxHeight: 800,
+    maxWidth: config.viewport.width,
+    maxHeight: config.viewport.height,
     everyNthFrame: 1,
   });
 

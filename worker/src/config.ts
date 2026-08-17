@@ -31,6 +31,11 @@ export const config = {
 
   port: Number(process.env.PORT) || 3001,
 
+  // single source of truth for the headless viewport, the wander-clamp
+  // fallback in cursor.ts, and the screencast capture size - these were
+  // three separately hardcoded copies (900/800/800) before this
+  viewport: { width: 1280, height: 900 },
+
   // dropdown option text to select once the report form is visible
   dropdownOptionText: 'UBL-UK Power Baseload Future (Gregorian)',
 

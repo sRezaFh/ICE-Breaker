@@ -31,7 +31,7 @@ export async function launchBrowser(): Promise<{ browser: Browser; page: Page }>
     // maximize against (local headed dev) - headless (Render) has none, so
     // it silently falls back to Puppeteer's small 800x600 default, which is
     // why table rows past the first couple ended up outside the viewport
-    defaultViewport: config.headless ? { width: 1280, height: 900 } : null,
+    defaultViewport: config.headless ? config.viewport : null,
     userDataDir: config.userDataDir,
     // --no-sandbox: the container runs as root (no USER set in the
     // Dockerfile), and Chrome's zygote refuses to start as root otherwise
