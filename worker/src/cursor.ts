@@ -43,19 +43,24 @@ export async function humanClick(
   target: ElementHandle | { x: number; y: number },
 ): Promise<void> {
   const startedAt = Date.now();
-  // every click drifts a bit first, not just the captcha step - ghost-cursor
-  // already curves each move, but a click right after a long idle wait with
-  // zero prior motion is its own tell
-  await idleWander(cursor, page, 1 + Math.floor(Math.random() * 2));
+  // a single short drift, not a multi-step meander - enough to avoid clicking
+  // stone-cold from a long idle wait, without wandering all over the page
+  // before every click
+  await idleWander(cursor, page, 1);
   await sleep(20 + Math.random() * 40);
+
+  // higher moveSpeed here (vs idleWander's 100) means fewer path steps for
+  // the same distance, i.e. a straighter, quicker line to the actual target -
+  // the meandering belongs to idleWander, not the approach itself
+  const approachSpeed = 300;
 
   // ghost-cursor's click() only accepts an ElementHandle/selector (or nothing,
   // clicking at the current position) - raw coordinates need a moveTo first
   if ('x' in target && 'y' in target) {
-    await cursor.moveTo(target, { moveSpeed: 100 });
+    await cursor.moveTo(target, { moveSpeed: approachSpeed });
     await cursor.click();
   } else {
-    await cursor.click(target, { moveSpeed: 100 });
+    await cursor.click(target, { moveSpeed: approachSpeed });
   }
   log.info(`[cursor] humanClick took ${Date.now() - startedAt}ms`);
 }

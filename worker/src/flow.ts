@@ -529,7 +529,18 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
     // initial scan - a click can trigger a table re-render (row order/count
     // unaffected, but the old DOM nodes go stale and boundingBox() on them
     // silently returns null further down the loop)
-    const button = (await findDownloadButtons(page))[index];
+    //
+    // a row can also disappear briefly right after a neighboring row's click
+    // (table reflow/re-render mid-flight) and reappear moments later - poll
+    // for it instead of judging it gone from a single snapshot
+    let button = (await findDownloadButtons(page))[index];
+    if (!button) {
+      const deadline = Date.now() + 3000;
+      while (!button && Date.now() < deadline) {
+        await sleep(300);
+        button = (await findDownloadButtons(page))[index];
+      }
+    }
     if (!button) {
       log.warn(`[download] (${index + 1}/${total}) button vanished from the table, skipping`);
       continue;
@@ -561,6 +572,16 @@ export async function downloadAllReports(page: Page, cursor: GhostCursor): Promi
 
       const response = await responsePromise;
       if (response && !response.ok()) {
+        // 409 means "conflict", not "never coming" - observed after clicking
+        // back-to-back rows, and clears on its own after a short pause. Any
+        // other status is a real failure (bad request, not found, etc), bail
+        // immediately rather than burning the retry on something that can't
+        // change.
+        if (response.status() === 409 && attempt === 1) {
+          log.warn(`[download] (${index + 1}/${total}) got 409 (conflict), backing off and retrying`);
+          await sleep(2000);
+          continue;
+        }
         log.warn(`[download] (${index + 1}/${total}) server returned ${response.status()}, not waiting for a file`);
         break;
       }
