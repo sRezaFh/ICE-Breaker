@@ -33,7 +33,11 @@ export async function launchBrowser(): Promise<{ browser: Browser; page: Page }>
     // why table rows past the first couple ended up outside the viewport
     defaultViewport: config.headless ? { width: 1280, height: 900 } : null,
     userDataDir: config.userDataDir,
-    args: config.headless ? [] : ['--start-maximized'],
+    // --no-sandbox: the container runs as root (no USER set in the
+    // Dockerfile), and Chrome's zygote refuses to start as root otherwise
+    args: config.headless
+      ? ['--no-sandbox', '--disable-setuid-sandbox']
+      : ['--start-maximized', '--no-sandbox', '--disable-setuid-sandbox'],
   })) as Browser;
 
   const page = await browser.newPage();
