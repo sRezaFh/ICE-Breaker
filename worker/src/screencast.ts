@@ -3,8 +3,8 @@ import { config } from './config.js';
 
 export type FrameHandler = (base64Jpeg: string) => void;
 
-// CDP screencast captures whatever's actually rendered, including the
-// ghost-cursor visible-mouse-helper overlay, works the same headless or not
+// CDP screencast captures whatever's actually rendered, works the same
+// headless or not
 export async function startScreencast(page: Page, onFrame: FrameHandler): Promise<() => Promise<void>> {
   const client = await page.createCDPSession();
 

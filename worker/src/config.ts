@@ -31,10 +31,11 @@ export const config = {
 
   port: Number(process.env.PORT) || 3001,
 
-  // single source of truth for the headless viewport, the wander-clamp
-  // fallback in cursor.ts, and the screencast capture size - these were
-  // three separately hardcoded copies (900/800/800) before this
+  // single source of truth for the headless viewport and the screencast
+  // capture size
   viewport: { width: 1280, height: 900 },
+
+  pollMs: 250,
 
   // dropdown option text to select once the report form is visible
   dropdownOptionText: 'UBL-UK Power Baseload Future (Gregorian)',
@@ -50,8 +51,10 @@ export const config = {
 
   timeouts: {
     navigationMs: 30_000,
-    challengeMs: 60_000,
+    gateMs: 180_000,
+    settleMs: 2_000,
     tableMs: 20_000,
+    directSubmitMs: 8_000,
     downloadMs: 30_000,
     // the 2captcha provider call itself has no built-in bound and can hang
     // silently well past its usual 10-30s (observed once at 10+ minutes with

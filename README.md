@@ -4,7 +4,7 @@ Automated downloader for ICE Report Center reports (UBL-UK Power Baseload Future
 
 ## Structure
 
-- `worker/`: Puppeteer scraper (stealth + 2Captcha-solved reCAPTCHA + ghost-cursor human-like mouse movement) and a small Express/WebSocket server (`server.ts`) that exposes it over HTTP: start a run, stream live log lines and a JPEG screencast of the browser (including the visible mouse cursor), and upload results to a GitHub Release when done.
+- `worker/`: Puppeteer scraper (stealth + 2Captcha-solved reCAPTCHA) and a small Express/WebSocket server (`server.ts`) that exposes it over HTTP: start a run, stream live log lines and a JPEG screencast of the browser, and upload results to a GitHub Release when done. How the flow works and why is in [Worker scrape flow](worker/SPEC.md).
 - `web/`: Next.js frontend, a Start button, a live view of the browser session, a log panel, and a results list linking to the uploaded files.
 - `render.yaml`: deploy config for the worker (Render, free web service tier).
 

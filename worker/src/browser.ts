@@ -42,11 +42,5 @@ export async function launchBrowser(): Promise<{ browser: Browser; page: Page }>
 
   const page = await browser.newPage();
 
-  const cdp = await page.createCDPSession();
-  await cdp.send('Page.setDownloadBehavior', {
-    behavior: 'allow',
-    downloadPath: config.downloadDir,
-  });
-
   return { browser, page };
 }
